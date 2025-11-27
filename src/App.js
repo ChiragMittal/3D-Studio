@@ -26,7 +26,8 @@ import {
   Heart,
   Square,
   Combine,
-  Scissors
+  Scissors,
+  Copy
 } from 'lucide-react';
 import { SUBTRACTION, ADDITION, INTERSECTION, Brush, Evaluator } from 'three-bvh-csg';
 
@@ -55,10 +56,10 @@ const PRIMITIVES = [
 ];
 
 const INITIAL_OBJECTS = [
-  { id: '1', type: 'cube', position: [-2, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#6366f1', wireframe: false },
+  { id: '1', type: 'cube', position: [-2, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#6366f1', wireframe: false, mirror: { enabled: false, axis: 'x' } },
   {
     id: '2', type: 'ex_star', position: [2, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#ec4899', wireframe: false,
-    extrudeSettings: { depth: 0.5, bevelEnabled: true, bevelThickness: 0.1, bevelSize: 0.1, bevelSegments: 3 }
+    extrudeSettings: { depth: 0.5, bevelEnabled: true, bevelThickness: 0.1, bevelSize: 0.1, bevelSegments: 3 }, mirror: { enabled: false, axis: 'x' }
   },
 ];
 
@@ -162,7 +163,8 @@ export default function App() {
         bevelThickness: 0.1,
         bevelSize: 0.1,
         bevelSegments: 3
-      } : undefined
+      } : undefined,
+      mirror: { enabled: false, axis: 'x' }
     };
     updateState([...objects, newObj], `Add ${type}`);
     setSelectedIds([newObj.id]);
@@ -207,6 +209,20 @@ export default function App() {
       };
     });
     updateState(newObjects, `Update ${setting}`);
+  };
+
+  const updateMirrorSetting = (id, setting, value) => {
+    const newObjects = objects.map(obj => {
+      if (obj.id !== id) return obj;
+      return {
+        ...obj,
+        mirror: {
+          ...(obj.mirror || { enabled: false, axis: 'x' }),
+          [setting]: value
+        }
+      };
+    });
+    updateState(newObjects, `Update Mirror ${setting}`);
   };
 
   const onUpdateObjectPosition = useCallback((id, newPos) => {
@@ -263,7 +279,8 @@ export default function App() {
         format: format,
         url: url,
         name: file.name,
-        position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#ffffff', wireframe: false
+        position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#ffffff', wireframe: false,
+        mirror: { enabled: false, axis: 'x' }
       };
       updateState([...objects, newObj], `Import ${file.name}`);
       setSelectedIds([newObj.id]);
@@ -539,6 +556,33 @@ export default function App() {
               </div>
             )}
 
+            {/* Mirror Modifier */}
+            <div className="pt-4 border-t border-slate-700 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-300">
+                <Copy size={16} /> Mirror Modifier
+              </div>
+              <div className="flex items-center justify-between">
+                <label className="text-xs text-slate-500">Enable Mirror</label>
+                <input type="checkbox" checked={selectedObject.mirror?.enabled || false} onChange={(e) => updateMirrorSetting(selectedObject.id, 'enabled', e.target.checked)} className="form-checkbox h-4 w-4 text-indigo-600 bg-slate-700 border-slate-600 rounded" />
+              </div>
+              {selectedObject.mirror?.enabled && (
+                <div>
+                  <label className="text-xs text-slate-500 block mb-1">Mirror Axis</label>
+                  <div className="flex gap-2">
+                    {['x', 'y', 'z'].map(axis => (
+                      <button
+                        key={axis}
+                        onClick={() => updateMirrorSetting(selectedObject.id, 'axis', axis)}
+                        className={`flex-1 py-1 text-xs rounded uppercase font-bold ${selectedObject.mirror?.axis === axis ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-400 hover:bg-slate-600'}`}
+                      >
+                        {axis}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="pt-4 border-t border-slate-700">
               <label className="text-xs text-slate-500 block mb-1">Color</label>
               <div className="flex gap-2">
@@ -659,7 +703,6 @@ const ThreeScene = ({ objects, selectedIds, activeTool, onSelect, onUpdateObject
   useEffect(() => {
     if (!sceneRef.current) return;
     const scene = sceneRef.current;
-    const currentIds = new Set(objects.map(o => o.id));
 
     objects.forEach(obj => {
       let mesh = meshesRef.current[obj.id];
@@ -734,6 +777,58 @@ const ThreeScene = ({ objects, selectedIds, activeTool, onSelect, onUpdateObject
       const sc = obj.scale || [1, 1, 1];
       mesh.scale.set(sc[0], sc[1], sc[2]);
 
+      // Mirror Logic
+      const mirrorId = `${obj.id}_mirror`;
+      let mirrorMesh = meshesRef.current[mirrorId];
+
+      if (obj.mirror && obj.mirror.enabled) {
+        // Check if we need to create or recreate the mirror mesh
+        // Recreate if it doesn't exist, or if the geometry has changed (e.g. extrusion update)
+        // For Groups (models), we check if the uuid matches (shallow check might not be enough for groups, but clone shares structure)
+        // A simpler check: if the original mesh was rebuilt in this frame, we should rebuild the mirror.
+        // We can detect if mesh was rebuilt by checking if it's different from what we might have tracked, 
+        // but here we can just check if geometries match for simple meshes.
+        // For models (Groups), geometry is undefined on the group.
+
+        const shouldRebuild = !mirrorMesh ||
+          (mesh.isMesh && mirrorMesh.isMesh && mirrorMesh.geometry !== mesh.geometry) ||
+          (mesh.isGroup && mirrorMesh.isGroup && mirrorMesh.children.length !== mesh.children.length); // Rough check for groups
+
+        if (shouldRebuild) {
+          if (mirrorMesh) {
+            scene.remove(mirrorMesh);
+            // Dispose if needed? Clone shares geometry/material so we don't dispose them.
+          }
+          mirrorMesh = mesh.clone();
+          mirrorMesh.userData.id = mirrorId;
+          mirrorMesh.userData.isMirror = true;
+          mirrorMesh.userData.parentId = obj.id;
+          scene.add(mirrorMesh);
+          meshesRef.current[mirrorId] = mirrorMesh;
+        }
+
+        // Sync Transform
+        mirrorMesh.position.copy(mesh.position);
+        mirrorMesh.rotation.copy(mesh.rotation);
+        mirrorMesh.scale.copy(mesh.scale);
+
+        // Apply Mirror Scale
+        const axis = obj.mirror.axis;
+        if (axis === 'x') mirrorMesh.scale.x *= -1;
+        if (axis === 'y') mirrorMesh.scale.y *= -1;
+        if (axis === 'z') mirrorMesh.scale.z *= -1;
+
+        // Reverse winding order for correct lighting on mirrored geometry?
+        // THREE.js usually handles negative scale, but sometimes front/back face culling can be an issue.
+        // Usually setting scale to negative works fine with DoubleSide or if THREE handles it.
+        // Let's assume standard material works.
+      } else {
+        if (mirrorMesh) {
+          scene.remove(mirrorMesh);
+          delete meshesRef.current[mirrorId];
+        }
+      }
+
       // Appearance
       const col = new THREE.Color(obj.color);
       mesh.traverse(c => {
@@ -753,8 +848,16 @@ const ThreeScene = ({ objects, selectedIds, activeTool, onSelect, onUpdateObject
       });
     });
 
+    const validIds = new Set();
+    objects.forEach(obj => {
+      validIds.add(obj.id);
+      if (obj.mirror && obj.mirror.enabled) {
+        validIds.add(`${obj.id}_mirror`);
+      }
+    });
+
     Object.keys(meshesRef.current).forEach(id => {
-      if (!currentIds.has(id)) {
+      if (!validIds.has(id)) {
         scene.remove(meshesRef.current[id]);
         meshesRef.current[id].traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
         delete meshesRef.current[id];
