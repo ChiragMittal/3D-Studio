@@ -15,17 +15,26 @@ import {
   Type, 
   MousePointer2,
   Upload,
-  Download, // Added Download Icon
-  History
+  Download,
+  History,
+  List,
+  Cylinder,
+  Hexagon,
+  Diamond,
+  Pentagon
 } from 'lucide-react';
 
 // --- Constants & Helpers ---
 const PRIMITIVES = [
   { type: 'cube', label: 'Cube', icon: Box },
   { type: 'sphere', label: 'Sphere', icon: Circle },
+  { type: 'cylinder', label: 'Cylinder', icon: Cylinder },
   { type: 'cone', label: 'Cone', icon: Triangle },
   { type: 'torus', label: 'Torus', icon: Layers }, 
-  { type: 'icosahedron', label: 'Ico', icon: Triangle },
+  { type: 'icosahedron', label: 'Ico', icon: Hexagon },
+  { type: 'dodecahedron', label: 'Dodeca', icon: Pentagon },
+  { type: 'octahedron', label: 'Octa', icon: Diamond },
+  { type: 'tetrahedron', label: 'Tetra', icon: Triangle },
 ];
 
 const INITIAL_OBJECTS = [
@@ -45,16 +54,28 @@ const getRandomColor = () => {
 export default function App() {
   // --- Scene State ---
   const [objects, setObjects] = useState(INITIAL_OBJECTS);
+  
+  // History now stores full state snapshots: { id, label, snapshot: [] }
   const [historyLog, setHistoryLog] = useState([]); 
+  
   const [selectedId, setSelectedId] = useState(null);
   const [activeTool, setActiveTool] = useState('select'); 
   
   const fileInputRef = useRef(null);
+  const historyEndRef = useRef(null);
 
   // Function to update the scene state and log the action
   const updateState = useCallback((newObjects, actionLabel) => {
       setObjects(newObjects);
-      setHistoryLog(prev => [...prev, actionLabel].slice(-20)); 
+      setHistoryLog(prev => {
+          const newEntry = {
+              id: generateId(),
+              label: actionLabel,
+              snapshot: JSON.parse(JSON.stringify(newObjects)), // Deep copy state
+              timestamp: new Date().toLocaleTimeString()
+          };
+          return [...prev, newEntry].slice(-20); // Keep last 20
+      });
   }, []);
 
   // --- Actions ---
@@ -71,6 +92,12 @@ export default function App() {
     updateState([...objects, newObj], `Add ${type}`);
     setSelectedId(newObj.id);
     setActiveTool('move'); 
+  };
+
+  const restoreState = (snapshot) => {
+      // Restore objects from history snapshot
+      setObjects(snapshot);
+      setSelectedId(null); // Deselect to avoid issues if selected object doesn't exist in snapshot
   };
   
   const onSelect = useCallback((id) => {
@@ -117,6 +144,13 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedId, objects]);
 
+  // Scroll to bottom of log
+  useEffect(() => {
+    if (historyEndRef.current) {
+        historyEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [historyLog]);
+
   // --- Import / Export Logic ---
 
   const handleImportClick = () => fileInputRef.current?.click();
@@ -137,7 +171,6 @@ export default function App() {
       
       const name = file.name.toLowerCase();
 
-      // Helper to add a generic model
       const addModel = (url, format) => {
           const newObj = {
               id: generateId(), 
@@ -152,16 +185,13 @@ export default function App() {
       };
 
       if (name.endsWith('.json')) {
-          // JSON can be a scene save (Array) or a Three.js Model (Object)
           const reader = new FileReader();
           reader.onload = (evt) => {
               try {
                   const json = JSON.parse(evt.target.result);
                   if (Array.isArray(json)) {
-                      // It's a saved scene state
                       updateState(json, `Load Scene ${file.name}`);
                   } else {
-                      // It's likely a Three.js JSON model, load via URL
                       const url = URL.createObjectURL(file);
                       addModel(url, 'json');
                   }
@@ -171,7 +201,6 @@ export default function App() {
           };
           reader.readAsText(file);
       } else {
-          // Binary formats (GLB, STL) or Text (OBJ) loaded via URL
           const url = URL.createObjectURL(file);
           const format = name.split('.').pop();
           addModel(url, format);
@@ -181,6 +210,13 @@ export default function App() {
   };
 
   const selectedObject = objects.find(o => o.id === selectedId);
+
+  const getObjectIcon = (type) => {
+      const prim = PRIMITIVES.find(p => p.type === type);
+      if (prim) return <prim.icon size={14} />;
+      if (type === 'model') return <Upload size={14} />;
+      return <Box size={14} />;
+  };
 
   return (
     <div className="flex h-screen w-full bg-slate-900 text-slate-100 overflow-hidden font-sans">
@@ -210,7 +246,7 @@ export default function App() {
             <div className="text-[10px] text-slate-500 uppercase font-bold mb-2 tracking-wider px-1">Create</div>
             <div className="grid grid-cols-3 gap-2">
               {PRIMITIVES.map((prim) => (
-                <button key={prim.type} onClick={() => addObject(prim.type)} className="aspect-square rounded-md bg-slate-700 hover:bg-slate-600 flex flex-col items-center justify-center gap-1 transition-colors group">
+                <button key={prim.type} onClick={() => addObject(prim.type)} className="aspect-square rounded-md bg-slate-700 hover:bg-slate-600 flex flex-col items-center justify-center gap-1 transition-colors group" title={prim.label}>
                     <prim.icon size={18} className="text-slate-400 group-hover:text-white" />
                 </button>
               ))}
@@ -220,21 +256,55 @@ export default function App() {
                     <Upload size={14} /> <span>Import</span>
                 </button>
                 <button onClick={handleExportClick} className="p-2 rounded-md bg-slate-700/50 border border-dashed border-slate-600 hover:border-indigo-500 text-xs text-slate-400 flex flex-col items-center justify-center gap-1">
-                    <Download size={14} /> <span>Export JSON</span>
+                    <Download size={14} /> <span>Export</span>
                 </button>
             </div>
           </div>
 
-          {/* History Log */}
-          <div className="flex-1 p-3 flex flex-col">
-            <div className="flex items-center justify-between text-[10px] text-slate-500 uppercase font-bold mb-2 tracking-wider px-1">
-               <div className="flex items-center gap-2"><History size={12} /> Action Log</div>
+          {/* Scene Objects List */}
+          <div className="flex-1 p-3 flex flex-col min-h-[150px]">
+             <div className="flex items-center justify-between text-[10px] text-slate-500 uppercase font-bold mb-2 tracking-wider px-1">
+               <div className="flex items-center gap-2"><List size={12} /> Scene Objects</div>
+             </div>
+             <div className="flex-1 bg-slate-900/50 rounded-lg border border-slate-700/50 overflow-y-auto p-2 space-y-1">
+                {objects.map((obj) => (
+                    <button
+                        key={obj.id}
+                        onClick={() => {
+                            setSelectedId(obj.id);
+                            setActiveTool('move');
+                        }}
+                        className={`w-full text-left px-2 py-1.5 rounded text-xs flex items-center gap-2 transition-colors ${
+                            selectedId === obj.id 
+                                ? 'bg-indigo-600 text-white' 
+                                : 'text-slate-400 hover:bg-slate-800'
+                        }`}
+                    >
+                        {getObjectIcon(obj.type)}
+                        <span className="truncate">{obj.name || `${obj.type} ${obj.id.substring(0,4)}`}</span>
+                    </button>
+                ))}
+                {objects.length === 0 && <div className="text-xs text-slate-600 italic p-1">Empty Scene</div>}
+             </div>
+          </div>
+
+          {/* Action Log */}
+          <div className="p-3 border-t border-slate-700 max-h-[150px] flex flex-col">
+            <div className="flex items-center gap-2 text-[10px] text-slate-500 uppercase font-bold mb-2 tracking-wider px-1">
+               <History size={12} /> History (Click to Restore)
             </div>
             <div className="flex-1 bg-slate-900/50 rounded-lg border border-slate-700/50 overflow-y-auto p-2 space-y-1">
-              {historyLog.slice().reverse().map((entry, i) => (
-                <div key={i} className="text-xs text-slate-400 truncate border-l-2 border-slate-700 pl-2">{entry}</div>
+              {historyLog.map((entry) => (
+                <button 
+                    key={entry.id} 
+                    onClick={() => restoreState(entry.snapshot)}
+                    className="w-full text-left text-xs text-slate-400 hover:bg-slate-800 hover:text-white truncate border-l-2 border-slate-700 pl-2 py-1 rounded transition-colors"
+                    title={`Restore state from ${entry.timestamp}`}
+                >
+                    {entry.label}
+                </button>
               ))}
-              {historyLog.length === 0 && <div className="text-xs text-slate-600 italic">No actions yet...</div>}
+              <div ref={historyEndRef} />
             </div>
           </div>
         </div>
@@ -403,8 +473,6 @@ const ThreeScene = ({ objects, selectedId, activeTool, onSelect, onUpdateObjectP
         mountRef.current.removeChild(renderer.domElement);
       }
       renderer.dispose();
-      
-      // Explicit cleanup of objects
       meshesRef.current = {};
     };
   }, []);
@@ -524,9 +592,13 @@ const ThreeScene = ({ objects, selectedId, activeTool, onSelect, onUpdateObjectP
           switch(obj.type) {
             case 'cube': geometry = new THREE.BoxGeometry(1, 1, 1); break;
             case 'sphere': geometry = new THREE.SphereGeometry(0.6, 32, 32); break;
+            case 'cylinder': geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 32); break;
             case 'cone': geometry = new THREE.ConeGeometry(0.5, 1, 32); break;
             case 'torus': geometry = new THREE.TorusGeometry(0.5, 0.2, 16, 100); break;
             case 'icosahedron': geometry = new THREE.IcosahedronGeometry(0.6, 0); break;
+            case 'dodecahedron': geometry = new THREE.DodecahedronGeometry(0.6, 0); break;
+            case 'octahedron': geometry = new THREE.OctahedronGeometry(0.6, 0); break;
+            case 'tetrahedron': geometry = new THREE.TetrahedronGeometry(0.6, 0); break;
             default: geometry = new THREE.BoxGeometry(1, 1, 1);
           }
           
@@ -544,22 +616,19 @@ const ThreeScene = ({ objects, selectedId, activeTool, onSelect, onUpdateObjectP
         meshes[obj.id] = mesh;
       }
 
-      // Update Transforms (Only if NOT currently dragging this specific object to prevent jitter)
+      // Update Transforms
       if (!isDraggingObject.current || selectedId !== obj.id) {
           mesh.position.set(...obj.position);
       }
       mesh.rotation.set(...obj.rotation);
       mesh.scale.set(...obj.scale);
 
-      // Update Material Props (Recursive for groups/models)
+      // Update Material Props
       const targetColor = new THREE.Color(obj.color);
       mesh.traverse((child) => {
          if (child.isMesh) {
-             // Only update color if it's significantly different to avoid thrashing
-             // Or if it is a primitive, we control it fully.
-             // For models, we might just want to tint or override if user changed it from default
              if (obj.type !== 'model' || obj.color !== '#ffffff') {
-                child.material.color.lerp(targetColor, 0.1); // Soft update for models
+                child.material.color.lerp(targetColor, 0.1);
              }
              if (obj.type !== 'model') {
                child.material.color.set(obj.color);
@@ -609,10 +678,9 @@ const ThreeScene = ({ objects, selectedId, activeTool, onSelect, onUpdateObjectP
       // Raycast
       raycaster.current.setFromCamera(mouse.current, cameraRef.current);
       const meshArray = Object.values(meshesRef.current);
-      const intersects = raycaster.current.intersectObjects(meshArray, true); // Recursive for groups
+      const intersects = raycaster.current.intersectObjects(meshArray, true); 
 
       if (intersects.length > 0) {
-        // Traverse up to find the root object with our ID
         let target = intersects[0].object;
         while (target && !target.userData.id) {
             target = target.parent;
@@ -649,7 +717,6 @@ const ThreeScene = ({ objects, selectedId, activeTool, onSelect, onUpdateObjectP
       const currentMouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       if (isDraggingObject.current && selectedId && activeTool === 'move') {
-        // Object Dragging Logic
         mouse.current.x = currentMouseX;
         mouse.current.y = currentMouseY;
         
@@ -660,12 +727,10 @@ const ThreeScene = ({ objects, selectedId, activeTool, onSelect, onUpdateObjectP
             const newPos = intersect.add(dragOffset.current);
             const mesh = meshesRef.current[selectedId];
             if (mesh) {
-                // Update position directly for smoothness
                 mesh.position.copy(newPos);
             }
         }
       } else if (cameraState.current.isDragging) {
-        // Camera Orbit Logic
         const dx = e.clientX - cameraState.current.lastMouse.x;
         const dy = e.clientY - cameraState.current.lastMouse.y;
         
@@ -679,7 +744,6 @@ const ThreeScene = ({ objects, selectedId, activeTool, onSelect, onUpdateObjectP
 
     const onMouseUp = () => {
       if (isDraggingObject.current && selectedId && activeTool === 'move') {
-        // Commit position to state
         const mesh = meshesRef.current[selectedId];
         if (mesh) {
           onUpdateObjectPosition(selectedId, [mesh.position.x, mesh.position.y, mesh.position.z]);
